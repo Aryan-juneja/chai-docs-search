@@ -4,7 +4,8 @@ from typing import List, Dict, Any
 import time
 from datetime import datetime
 import logging
-
+import re
+import json
 # Langchain imports
 from langchain_pinecone import PineconeVectorStore
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
@@ -807,7 +808,7 @@ class ChaiDocsSearchApp:
             st.stop()
     
     def create_search_prompt(self, query: str, context_docs: List[Document]) -> str:
-        """Create a comprehensive prompt for the LLM"""
+        """Create a comprehensive prompt for the LLM with JSON response format"""
         context_text = ""
         for i, doc in enumerate(context_docs, 1):
             context_text += f"""
@@ -823,26 +824,77 @@ Content: {doc.page_content}
         prompt = f"""
 You are a helpful assistant that provides detailed answers about programming and development topics based on the Chai Docs documentation.
 
-Based on the following context documents, please answer the user's question comprehensively:
+Based on the following context documents, please answer the user's question and format your response as a JSON object with the following structure:
+
+{{
+    "summary": "Brief overview of the answer in 1-2 sentences",
+    "detailed_answer": "Comprehensive explanation of the topic",
+    "code_examples": [
+        {{
+            "language": "html/python/javascript/sql/bash",
+            "description": "What this code does",
+            "code": "actual code here"
+        }}
+    ],
+    "key_points": [
+        "Important point 1",
+        "Important point 2",
+        "Important point 3"
+    ],
+    "related_links": [
+        {{
+            "title": "Link title from source",
+            "url": "actual URL from metadata",
+            "description": "Brief description of what this link covers"
+        }}
+    ],
+    "categories": ["category1", "category2"],
+    "difficulty_level": "beginner/intermediate/advanced",
+    "additional_resources": [
+        "Suggestion 1 for further learning",
+        "Suggestion 2 for further learning"
+    ]
+}}
 
 CONTEXT DOCUMENTS:
 {context_text}
 
 USER QUESTION: {query}
 
-Please provide a detailed answer that:
-1. Directly addresses the user's question
-2. Uses information from the provided context documents
-3. Includes specific examples or code snippets when relevant
-4. References the source documents when appropriate
-5. Is well-structured and easy to understand
+Important guidelines:
+1. Extract actual URLs from the document metadata for the related_links section
+2. Include practical code examples when relevant
+3. Make the detailed_answer comprehensive but well-structured
+4. Ensure all JSON is properly formatted and valid
+5. Use the categories from the source documents
+6. Provide actionable key points
 
-If the context doesn't contain enough information to fully answer the question, please indicate what information is available and suggest what additional resources might be helpful.
-
-ANSWER:
+Return ONLY the JSON response, no additional text before or after.
 """
         return prompt
-    
+    def parse_json_response(self, response_text: str) -> Dict[Any, Any]:
+        """Parse JSON response from LLM with error handling"""
+        try:
+            # Try to extract JSON from response if it contains extra text
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+            else:
+                json_str = response_text
+            
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            # Fallback to plain text if JSON parsing fails
+            return {
+                "summary": "Response formatting error",
+                "detailed_answer": response_text,
+                "code_examples": [],
+                "key_points": [],
+                "related_links": [],
+                "categories": [],
+                "difficulty_level": "unknown",
+                "additional_resources": []
+            }
     def search_and_generate_response(self, query: str, num_results: int = 5):
         """Search Pinecone and generate LLM response"""
         try:
@@ -950,7 +1002,181 @@ ANSWER:
                 st.rerun()
             
             return num_results
+    def display_json_response(self, json_response: Dict[Any, Any]):
+        """Display formatted JSON response with enhanced styling"""
+        
+        # Summary section
+        if json_response.get("summary"):
+            st.markdown(f"""
+            <div class="response-container" style="border-left: 4px solid var(--accent-success);">
+                <h3 style="color: var(--accent-success); margin-bottom: 1rem;">📋 Quick Summary</h3>
+                <p style="font-size: 1.1rem; font-weight: 500;">{json_response["summary"]}</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Detailed answer section
+        if json_response.get("detailed_answer"):
+            st.markdown(f"""
+            <div class="response-container">
+                <h3 style="color: var(--accent-primary); margin-bottom: 1rem;">📚 Detailed Explanation</h3>
+                <div style="line-height: 1.8;">
+                    {self.format_detailed_answer(json_response["detailed_answer"])}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Code examples section
+        if json_response.get("code_examples"):
+            st.markdown("""
+            <div class="response-container" style="border-left: 4px solid var(--accent-code);">
+                <h3 style="color: var(--accent-code); margin-bottom: 1rem;">💻 Code Examples</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            for i, example in enumerate(json_response["code_examples"], 1):
+                st.markdown(f"""
+                <div class="code-block">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <h4 style="margin: 0; color: var(--accent-code);">Example {i}: {example.get('description', 'Code Example')}</h4>
+                        <span style="background: rgba(121, 192, 255, 0.2); color: var(--accent-code); padding: 0.3rem 0.8rem; border-radius: 15px; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">
+                            {example.get('language', 'code')}
+                        </span>
+                    </div>
+                    <pre><code>{example.get('code', '')}</code></pre>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # Key points section
+        if json_response.get("key_points"):
+            st.markdown("""
+            <div class="response-container" style="border-left: 4px solid var(--accent-warning);">
+                <h3 style="color: var(--accent-warning); margin-bottom: 1rem;">🎯 Key Points</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            for point in json_response["key_points"]:
+                st.markdown(f"""
+                <div style="display: flex; align-items: flex-start; margin-bottom: 0.8rem; padding: 0.8rem; background: rgba(245, 158, 11, 0.1); border-radius: 8px; border-left: 3px solid var(--accent-warning);">
+                    <span style="color: var(--accent-warning); margin-right: 0.8rem; font-size: 1.2rem;">•</span>
+                    <p style="margin: 0; color: var(--text-secondary); line-height: 1.6;">{point}</p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # Related links section
+        if json_response.get("related_links"):
+            st.markdown("""
+            <div class="response-container" style="border-left: 4px solid var(--accent-secondary);">
+                <h3 style="color: var(--accent-secondary); margin-bottom: 1rem;">🔗 Related Resources</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            for link in json_response["related_links"]:
+                st.markdown(f"""
+                <div style="margin-bottom: 1rem; padding: 1rem; background: rgba(118, 75, 162, 0.1); border-radius: 8px; border-left: 3px solid var(--accent-secondary);">
+                    <h4 style="margin: 0 0 0.5rem 0; color: var(--text-primary);">
+                        <a href="{link.get('url', '#')}" target="_blank" class="response-link" style="text-decoration: none; color: var(--accent-secondary);">
+                            {link.get('title', 'Resource')}
+                        </a>
+                    </h4>
+                    <p style="margin: 0; color: var(--text-secondary); font-size: 0.9rem;">{link.get('description', '')}</p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # Metadata section
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if json_response.get("categories"):
+                st.markdown("""
+                <div class="response-container" style="border-left: 4px solid var(--accent-primary);">
+                    <h4 style="color: var(--accent-primary); margin-bottom: 1rem;">📂 Categories</h4>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                for category in json_response["categories"]:
+                    st.markdown(f'<span class="category-badge">{category}</span>', unsafe_allow_html=True)
+        
+        with col2:
+            if json_response.get("difficulty_level"):
+                difficulty_colors = {
+                    "beginner": "var(--accent-success)",
+                    "intermediate": "var(--accent-warning)", 
+                    "advanced": "var(--accent-error)"
+                }
+                color = difficulty_colors.get(json_response["difficulty_level"].lower(), "var(--accent-primary)")
+                
+                st.markdown(f"""
+                <div class="response-container" style="border-left: 4px solid {color};">
+                    <h4 style="color: {color}; margin-bottom: 1rem;">📊 Difficulty Level</h4>
+                    <span style="background: {color}; color: var(--text-primary); padding: 0.5rem 1rem; border-radius: 20px; font-weight: 600; text-transform: capitalize;">
+                        {json_response["difficulty_level"]}
+                    </span>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # Additional resources section
+        if json_response.get("additional_resources"):
+            st.markdown("""
+            <div class="response-container" style="border-left: 4px solid var(--accent-success);">
+                <h3 style="color: var(--accent-success); margin-bottom: 1rem;">🚀 Next Steps</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            for resource in json_response["additional_resources"]:
+                st.markdown(f"""
+                <div style="display: flex; align-items: flex-start; margin-bottom: 0.8rem; padding: 0.8rem; background: rgba(16, 185, 129, 0.1); border-radius: 8px; border-left: 3px solid var(--accent-success);">
+                    <span style="color: var(--accent-success); margin-right: 0.8rem; font-size: 1.2rem;">→</span>
+                    <p style="margin: 0; color: var(--text-secondary); line-height: 1.6;">{resource}</p>
+                </div>
+                """, unsafe_allow_html=True)
     
+    def format_detailed_answer(self, text: str) -> str:
+        """Format detailed answer text with proper HTML styling"""
+        # Convert newlines to HTML breaks
+        text = text.replace('\n', '<br>')
+        
+        # Format inline code (text between backticks)
+        text = re.sub(r'`([^`]+)`', r'<span class="inline-code">\1</span>', text)
+        
+        # Format bold text
+        text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
+        
+        # Format italic text
+        text = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', text)
+        
+        return text
+    
+    def search_and_generate_response(self, query: str, num_results: int = 5):
+        """Search Pinecone and generate JSON formatted LLM response"""
+        try:
+            with st.spinner("🔍 Searching knowledge base..."):
+                # Search for relevant documents
+                search_results = st.session_state.vector_store.similarity_search(
+                    query, 
+                    k=num_results
+                )
+                
+                if not search_results:
+                    return None, [], "No relevant documents found for your query."
+            
+            with st.spinner("🤖 Generating comprehensive answer..."):
+                # Create prompt and get LLM response
+                prompt = self.create_search_prompt(query, search_results)
+                
+                response = st.session_state.llm.invoke([
+                    SystemMessage(content="You are a knowledgeable programming instructor helping students learn from the Chai Docs. Always respond with valid JSON format only."),
+                    HumanMessage(content=prompt)
+                ])
+                
+                # Parse JSON response
+                json_response = self.parse_json_response(response.content)
+                
+                return json_response, search_results, None
+        
+        except Exception as e:
+            error_msg = f"Error during search: {str(e)}"
+            logger.error(error_msg)
+            return None, [], error_msg
     def run(self):
         """Main application function"""
         # Header with enhanced styling
@@ -1024,23 +1250,18 @@ ANSWER:
         # Search button and processing
         if search_clicked and query.strip():
             # Perform search
-            response, results, error = self.search_and_generate_response(query, num_results)
+            json_response, results, error = self.search_and_generate_response(query, num_results)
             
             if error:
                 st.error(f"❌ {error}")
-            elif response and results:
-                # Add to history
-                self.add_to_history(query, response)
+            elif json_response and results:
+                # Add to history (store summary for history)
+                summary_for_history = json_response.get("summary", str(json_response)[:200])
+                self.add_to_history(query, summary_for_history)
                 
-                # Display comprehensive answer with enhanced styling
+                # Display JSON formatted answer
                 st.markdown("### 🎯 Comprehensive Answer")
-                st.markdown(f"""
-                <div class="result-card fade-in">
-                    <div style="line-height: 1.8; font-size: 1rem;">
-                        {response.replace('\n', '<br>')}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                self.display_json_response(json_response)
                 
                 # Display source documents
                 self.display_search_results(results)
